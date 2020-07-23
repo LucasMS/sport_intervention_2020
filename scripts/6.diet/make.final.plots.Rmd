@@ -1,0 +1,179 @@
+---
+title: "Make final figure for diet"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+I will gather the results and make a final picture for the diet analysis.
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 10))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+```
+
+## Import data
+```{r}
+d.in <- "/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/6.diet"
+
+intervention <- "plots.intervention.rds" %>% 
+  paste0(d.in, "/", .) %>% 
+  readRDS()
+after <- 'plots.after.rds' %>% 
+  paste0(d.in, "/", .) %>% 
+  readRDS()
+pca <- "pca.rds" %>% 
+  paste0(d.in, "/", .) %>% 
+  readRDS()
+meta <- "~/IKMB/projects/sport/data.clean/sampling.data.tsv" %>%
+  read_tsv()
+```
+
+# Get PCA
+
+```{r}
+pca <- meta %>% 
+  filter(Group != "Elite") %>% 
+  inner_join(pca, by = "Seq.ID") %>% 
+  group_by(ParticipantID) %>%
+  arrange(collection.date) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Endurance", "Strength"))) %>% 
+  #plot
+  ggplot(aes(x= PC1, y = PC2)) +
+  geom_text(aes(colour = Group, group = ParticipantID, label = Days), size = 2) +
+  #change shape because shape two is a triangle, and that is confusing with the arrow
+  scale_shape_manual(values = c(16, 15)) +
+  # add arrow
+  geom_path(aes(group = ParticipantID, colour = Group),
+            stat = "identity",
+            arrow = arrow(length = unit(0.2, "cm"),
+                          type = "open"),
+            size = 0.8, alpha = 0.3) +
+  #facet
+  facet_wrap(~ Group, ncol= 3) +
+  #remove long legend
+  guides(colour=FALSE) +
+  #legend nicer, save space
+  theme(legend.position="bottom") +
+  labs(x = "PC1 (18.4%)", y = "PC2 (12.9%)")
+
+pca
+
+```
+
+
+# Set figures
+
+```{r}
+a <- intervention[[1]] + coord_flip()
+
+b <- after[[1]] + coord_flip()
+
+c <- intervention[[2]]
+
+d <- intervention[[3]]
+e <- after[[3]]
+
+```
+
+
+```{r, fig.width= 11, fig.height=5, warning=F}
+
+g1 <- ggarrange(a, b, labels = c("A", "B"), common.legend = T, legend = "bottom")
+g1
+```
+
+
+
+```{r, fig.width= 10, fig.height=7, warning=F}
+
+
+ged <- ggarrange(d,e , labels = c("B", "C"), nrow = 2)
+
+
+g2 <- ggarrange(ged, c, ncol= 2, labels = c("", "D"), widths = c(2, 7), legend = "bottom",  common.legend = T)
+
+g2
+
+g3 <- ggarrange(pca, g2, nrow = 2, labels = c("A", ""), heights = c(1, 1))
+g3
+```
+# save plot elements
+
+```{r}
+"plot.elements.rds" %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(g3, .)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

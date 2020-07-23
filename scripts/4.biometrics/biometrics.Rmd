@@ -1,0 +1,362 @@
+---
+title: "Visualize and test biometric variables"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+I will visualize and test biometric variables.
+
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 16))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(magrittr)
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(reshape2)
+library(readODS)
+```
+# Import data
+
+```{r}
+meta <- "~/IKMB/projects/sport/data.clean/sampling.data.tsv" %>% 
+  read_tsv() %>% 
+  select(ParticipantID, Group) %>% 
+  unique()
+
+
+biometrics <- "~/IKMB/projects/sport/data.clean/biometrics.tsv" %>% 
+  read_tsv()
+```
+
+# Add group information
+
+```{r}
+biometrics <- biometrics %>% 
+  inner_join(meta %>%  select(ParticipantID, Group) %>% unique(), by = "ParticipantID")
+```
+
+
+
+# Test function
+
+```{r}
+
+do.w.test <- function(data, test, group){
+  
+  # Select column to test
+  column <- "Group"
+  # Select data
+  df <- data %>% 
+    rename("Grouping" = column) %>% 
+    filter(Test == test,
+           Grouping == group)
+  
+  #Remove NA
+  df <- df %>%
+    filter(!is.na(Value))
+  
+  # Select only paired Participants
+  odd.participants <- count(df, ParticipantID) %>%
+    filter(n != 2) %>% 
+    pull(ParticipantID)
+  df <- df %>% 
+    filter(!ParticipantID %in% odd.participants)
+  ## Arrange, so the pairs can be recognized by the test
+  df <- df %>% 
+    arrange(ParticipantID) %>%
+    arrange(Timepoint)
+  # Make the formula
+  f <- as.formula("Value ~ Timepoint")
+  
+  # Perform wilcoxon
+  wcx <- wilcox.test(f, data = df, paired = T) %>%
+    tidy() %>%
+    mutate(test = test,
+           group = group,
+           n = nrow(df)/2)
+  
+  # Calculate r (rank-biserial correlation), version 1 ( After Kerby 2014)
+  #  r = f – u
+  sum.ranks  <- df %>% 
+    select(Value, Timepoint, ParticipantID) %>% 
+    dcast(ParticipantID  ~ Timepoint, value.var = "Value") %>% 
+    # get changes. ties are averaged (default)
+    mutate(change = After - Before) %>% 
+    # Get ranks of absolute values of the change score
+    mutate(rank = rank(abs(change))) %>%
+    #get direction
+    mutate(direction = if_else(change > 0,
+                               "favorable",
+                               "unfavorable")) %>% 
+    group_by(direction) %>%
+    #calculate sum of favorable and unfavorable ranks
+    summarise(sum.ranks = sum(rank)) %>%
+    #Get proportions of fav and unfav
+    ungroup() %>%
+    mutate(sum.ranks.proportion = sum.ranks/sum(sum.ranks)) %>% 
+    #Make sure sum of ranks has all the directions
+    right_join(data.frame(direction = c("favorable",
+                                        "unfavorable"),
+                          strinsgAsFactors = F),
+               by = "direction")
+  #Conver NAś to zero in sum of ranks
+  sum.ranks[is.na(sum.ranks)] <- 0
+  
+  rfu <- sum.ranks %>% 
+    # get matched-pairs rank-biserial correlation as r = f – u
+    summarize(r = filter(., direction == "favorable") %>%
+                pull(sum.ranks.proportion) - filter(., direction == "unfavorable") %>% 
+                pull(sum.ranks.proportion)) %>% 
+    pull(r)
+  
+  # Gather results
+  wcx <- wcx %>% 
+    mutate(r = rfu,
+           favorable = sum.ranks %>%
+             filter( direction == "favorable") %>% 
+             pull(sum.ranks.proportion),
+           unfavorable = sum.ranks %>%
+             filter( direction == "unfavorable") %>% 
+             pull(sum.ranks.proportion)
+    )
+  
+  return(wcx) 
+}
+```
+
+# Set variables to test
+```{r}
+groups <- biometrics %>% pull(Group) %>% unique()
+tests <- biometrics %>% pull(Test) %>% unique()
+tests
+```
+# Remove NAs
+```{r}
+biometrics <- biometrics %>%
+  filter(!is.na(Value))
+```
+
+# Correct 0 values to NA
+
+```{r}
+
+biometrics <- biometrics %>% 
+  mutate(Value = if_else(Value == 0,
+                         NA_real_,
+                         Value))
+```
+
+
+# Perform the tests
+
+```{r, warning = F}
+res <- NULL
+for (g in groups){
+  for(t in tests){
+    tryCatch({
+      res <- bind_rows(res,
+                       do.w.test(biometrics, t, g))},
+      error = function(e){print(paste("error", g, t))})
+  }
+}
+```
+
+# Adjusting
+
+```{r}
+res <- res %>% 
+  group_by(group) %>% 
+  mutate(p.adj = p.adjust(p.value, "fdr")) %>% 
+  select(test, group, p.adj, p.value, everything()) %>% 
+  arrange(p.adj)
+```
+
+Note that, as in other tests, the adjustment of multiple testing was done withing each group.
+
+
+# Do some arrangings on the results table
+
+```{r}
+res <- res %>% 
+  ungroup() %>% 
+  arrange(group, test) %>% 
+  mutate(group = factor(group, levels= c("Control","Endurance" , "Strength" )))
+```
+
+# Save results in a table
+```{r}
+"statistical.results.tsv" %>% 
+  paste0(d.out, "/",.) %>% 
+  write_tsv(res,.)
+```
+# Save results in a table
+```{r}
+"to.publish.statistical.results.tsv" %>% 
+  paste0(d.out, "/",.) %>% 
+  write_tsv(res %>% select(-favorable, -unfavorable) %>% 
+              filter(group %in% c("Control","Endurance" , "Strength")),.)
+```
+
+
+# Overview
+
+## All results
+
+
+```{r, fig.height=9}
+
+res %>%
+  filter(group %in% c("Control","Endurance" , "Strength")) %>% 
+  select(test, group, p.adj, p.value, r) %>%
+  droplevels() %>% 
+  mutate(sig.after.adjusting = if_else(p.adj < 0.05,
+                                       "yes",
+                                       "no"),
+         sig.after.adjusting = if_else(is.na(sig.after.adjusting),
+                                       "no",
+                                       sig.after.adjusting)) %>% 
+  ggplot(aes(x = group, y = test, fill = r))+
+  geom_tile() +
+  scale_fill_gradient2(low="dodgerblue4", mid="white", high="firebrick4", 
+                       midpoint=0) +
+  ggpubr::rotate_x_text() +
+  geom_point(aes(color = sig.after.adjusting), size =3) +
+  guides(color=guide_legend(title="FDR < 0.05")) +
+  labs( x = "Group", y = "Test")
+```
+
+
+# Detailed plots
+
+## Significants
+
+```{r}
+label.df <- res %>%
+  filter(p.adj < 0.05) %>% 
+  rename("Test" = "test",
+         "Group" = "group") %>% 
+  mutate(label = "*") %>% 
+  select(Test, Group, label, p.adj) %>% 
+  arrange(Test, Group) %>%
+  group_by(Test) %>% 
+  #add positions
+  mutate(hjustvar = 0) %>% 
+  mutate(vjustvar = factor(Group, levels = unique(Group)) %>% 
+           as.numeric + 0.5,
+         vjustvar = vjustvar * 2) %>% 
+  mutate(xpos = -Inf) %>% 
+  mutate(ypos = Inf) %>% 
+  mutate(annotateText = paste0("adj.p: ",round(p.adj, 3)))
+```
+
+```{r, fig.width=8}
+biometrics %>%
+  mutate(Timepoint = factor(Timepoint, levels = c("Before", "After"))) %>%
+  filter(Test %in% (label.df %>% pull(Test) %>% unique)) %>%
+  ggplot(aes (x = Timepoint, y = Value, group =  Group)) +
+  geom_smooth(aes(col = Group, fill= Group), method = "glm", se = F) +
+  geom_jitter(aes(col = Group)) +
+  facet_wrap(~ Test, scales = "free", nrow = 1) +
+  geom_text(data=label.df,aes(x = xpos,
+                              y = ypos,
+                              hjust = hjustvar,
+                              vjust = vjustvar,
+                              label = annotateText,
+                              col = Group))
+```
+
+### Save plot elements
+
+```{r}
+save.figure.elements <- list(biometrics, label.df)
+"figure.elements.rds" %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(save.figure.elements,.)
+```
+
+
+## All results
+```{r, fig.width=10, fig.height=10}
+biometrics %>%
+  mutate(Timepoint = factor(Timepoint, levels = c("Before", "After"))) %>%
+  ggplot(aes (x = Timepoint, y = Value, group =  Group)) +
+  geom_smooth(aes(col = Group, fill= Group), method = "glm", se = F) +
+  geom_jitter(aes(col = Group)) +
+  facet_wrap(~ Test, scales = "free", nrow = 4) +
+  geom_text(data=label.df,aes(x = xpos,
+                              y = ypos, 
+                              hjust = hjustvar, 
+                              vjust = vjustvar,
+                              label = annotateText, 
+                              col = Group))
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

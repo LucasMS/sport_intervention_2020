@@ -1,0 +1,226 @@
+---
+title: "Run differential abundance analysis between elite participants and matched others"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+Run differential abundance analysis between elite and matched others.
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 10))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(DESeq2)
+library(reshape2)
+```
+
+## Import data
+```{r}
+d.in <- "~/IKMB/projects/sport/data.clean"
+
+meta <- "elite.group.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read_tsv()
+micro <-  "micro.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+micro.r <- "micro.r.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+tax <- "tax.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+pca <- "~/IKMB/projects/sport/analysis/25.to.publish/6.diet/pca.rds" %>% 
+  readRDS()
+
+```
+#Meta
+```{r}
+meta <- meta %>% 
+  inner_join(pca, by = "Seq.ID")
+```
+
+# Filter data for group and period
+
+## Filter microbiome
+
+```{r}
+micro <- micro %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro <- micro[,colSums(micro)> 0]
+
+micro.r <- micro.r %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro.r <- micro.r[,colSums(micro.r)> 0]
+```
+
+# Perform DESEq2 routine
+
+
+## Construct a *DESeqDataSet* object
+
+```{r}
+micro.t <- t(micro) %>% 
+  data.frame()
+
+dds <- DESeqDataSetFromMatrix(countData = micro.t,
+                                colData = meta,
+                                design = ~ PC1 + Group)
+```
+
+## Gather bacteria to keep
+I will only keep bacteria that are present in at least 10% of samples and mean base of 10.
+```{r}
+#Set cutoff core
+cut.off.core <- 0.10 #proportion
+min.samples <- nrow(micro) * cut.off.core
+print(min.samples)
+# Get ASVs that pass the core cutoff
+core <- micro > 0
+core <- core %>% colSums()
+core <- core[core > min.samples]
+core <- names(core)
+#Set cut-off base mean
+mean.cut.off <- 10
+# Set mean abundance
+mean.ab <- micro.r %>% colSums()
+mean.ab <- mean.ab / nrow(micro.r)
+mean.ab <- mean.ab[mean.ab > mean.cut.off]
+mean.ab <- names(mean.ab)
+asv.to.keep <- intersect(core, mean.ab)
+print(length(asv.to.keep))
+```
+
+# Estimate size factor
+```{r}
+dds <- estimateSizeFactors(dds, "poscounts") # necessary due to error with  geometric mean equal to zero
+idx <- rownames(micro.t) %in% asv.to.keep
+names(idx) <- rownames(micro.t)
+dds <- dds[idx,]
+```
+
+## Do the test
+
+```{r, cache = F}
+dds <- DESeq(dds)
+```
+### View
+
+```{r}
+plotMA(results(dds) )
+```
+
+## Check results
+```{r}
+res <- results(dds) %>%
+   data.frame()
+
+ggplot(res, aes(x = pvalue)) +
+  geom_histogram(bins = 50) +
+  ggtitle("DESeq2 p-value distribution")
+
+```
+
+## Include info
+
+```{r}
+res <- res %>%
+  rownames_to_column("ASV") %>%
+  arrange(padj) %>% 
+  left_join(tax %>% select(ASV, Phylum, Genus), by = "ASV") 
+```
+
+### View
+```{r}
+head(res, 50)
+```
+
+## Plot log fold change
+
+```{r}
+res %>%
+  filter(padj < 0.05) %>% 
+  ggplot(aes(x = Genus, y = log2FoldChange, colour = Phylum)) +
+  geom_point(size =3, alpha =0.8) +
+  ggpubr::rotate_x_text() +
+  coord_flip() +
+  theme(legend.position = "bottom") +
+  labs(y= "log2 fold change\n(Control/Elite)", x = "")
+# Save plotting info
+paste0(d.out, "/", "to.plot.diff.rds") %>%
+  saveRDS(res, .)
+```
+
+
+# Save
+
+```{r}
+paste0(d.out, "/","dseq.res.stats.tsv") %>%
+  write_tsv(res, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

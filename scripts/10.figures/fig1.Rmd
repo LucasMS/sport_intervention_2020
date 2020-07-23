@@ -1,0 +1,146 @@
+---
+title: "Figure 1"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 10))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+```
+
+## Import data
+```{r}
+
+heart.sum.participant <- "~/IKMB/projects/sport/analysis/25.to.publish/2.heart.rate/heart.sum.participant.rds" %>% 
+  readRDS()
+steps <-  '~/IKMB/projects/sport/analysis/25.to.publish/1.steps/steps.rds' %>% 
+  readRDS()
+sleep <- '~/IKMB/projects/sport/analysis/25.to.publish/3.sleep/sleep.rds' %>% 
+  readRDS()
+```
+
+# Figures
+
+```{r, fig.width= 7, fig.height=4.5}
+# Set comparisons for tests
+
+my_comparisons <- list( c("Control", "Endurance"), c("Endurance", "Strength"), c("Control", "Strength") )
+
+
+# Plot steps
+steps <- steps %>%
+  group_by(Group, ParticipantID) %>% 
+  summarise(avg = mean(Steps), sd = sd(Steps), median = median(Steps)) 
+
+a <- steps %>% 
+  ggplot(aes(x= Group, y = avg)) +
+  geom_boxplot(coef = 6, aes(color = Group)) +
+  geom_jitter(aes(color=Group)) +
+  labs(y = "Avg. daily steps", x = "") +
+  ggpubr::rotate_x_text() +
+  theme(legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format")
+
+ggpubr::compare_means(avg ~ Group,  data = steps)
+
+# Plot hear rate
+
+b <- heart.sum.participant %>% 
+  ggplot(aes(x= Group, y = plus85.sum)) +
+  geom_boxplot(coef = 6, aes(color = Group)) +
+  geom_jitter(aes(color=Group)) +
+  scale_y_log10() +
+  labs(y = "Hours at\n>85% APHRM", x = "") +
+  ggpubr::rotate_x_text() +
+  theme(legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format")
+
+ggpubr::compare_means(plus85.sum ~ Group,  data = heart.sum.participant)
+
+sleep <-  sleep %>%
+  group_by( ParticipantID, Group) %>% 
+  summarise(avg.hour = mean(hour), sd = sd(hour))
+
+# Plot sleep   
+c <- sleep %>% 
+  ggplot(aes(x = Group, y = avg.hour)) +
+  geom_boxplot(coef=6,aes(color = Group)) +
+  geom_jitter(aes(color=Group)) +
+  labs(y = "Avg. sleeping hours", x = "") +
+  ggpubr::rotate_x_text() +
+  theme(legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format")
+
+ggpubr::compare_means(avg.hour ~ Group,  data = sleep)
+
+ggarrange(a, b, c, ncol = 3, labels = c("C", "D", "E"))
+```
+
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,304 @@
+---
+title: "Run diversity analysis within a group"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  group: "Control"
+  stage: "intervention"
+---
+
+
+# Introduction
+Run group-wise diversity analysis
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory and data period
+d.out <- params$d.out
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(vegan)
+library(reshape2)
+library(broom) # plotting residuas vs fit nicely
+library(magrittr) #set colnames
+library(spaa) #convert dist to list
+library(plotrix) # calculates standard error
+```
+
+## Import data
+```{r}
+d.in <- "~/IKMB/projects/sport/data.clean"
+
+meta <- "sampling.data.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read_tsv()
+micro <-  "micro.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+micro.r <- "micro.r.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+alpha <- "alpha.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read_tsv()
+pca <- "~/IKMB/projects/sport/analysis/25.to.publish/6.diet/pca.rds" %>% 
+  readRDS()
+```
+
+# Set working group and period
+
+```{r}
+group <- params$group
+stage <- params$stage
+```
+
+# Filter data for group and period
+
+## Filter metadata
+```{r}
+if(stage == "intervention"){
+meta <- meta %>%
+  filter(Group == group) %>% 
+  filter(collection.date <= end.intervention)
+}
+
+if(stage == "after"){
+meta <- meta %>%
+  filter(Group == group) %>% 
+  filter((collection.date > end.intervention -15) &
+           (collection.date < end.intervention +15))
+}
+meta <- meta %>% 
+  inner_join(pca, by = "Seq.ID")
+```
+
+## Filter microbiome
+
+```{r}
+micro <- micro %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro <- micro[,colSums(micro)> 0]
+
+micro.r <- micro.r %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro.r <- micro.r[,colSums(micro.r)> 0]
+```
+
+## Filter alpha diversity
+
+```{r}
+alpha <- alpha %>%
+  right_join(., meta,by = "Seq.ID")
+```
+
+
+# Visualize alpha diversity
+
+
+```{r}
+alpha %>%
+  select(Seq.ID, Chao1, InvSimp) %>% 
+  melt(variable.name = "alpha.div") %>%
+  left_join(alpha,
+            by = "Seq.ID") %>%
+  ggplot(., aes(x = Days,
+                     y = value,
+                color = ParticipantID)) +
+  geom_point() +
+  geom_smooth(method = "lm", aes(group = alpha.div)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ alpha.div, scales = "free") +
+  labs(title = group)
+```
+
+## Stats
+
+The aim is to see if there is any difference in alpha diversity due to time.
+
+
+```{r}
+#
+do.lm <- function(df, variable){
+
+f.f <- as.formula(paste("log(", variable, ")", "~", "ParticipantID + PC1 + Days"))
+
+m.f <- lm(f.f, df)
+
+
+res.fit.plot <- augment(m.f) %>% 
+    ggplot(aes_string(x = ".fitted", y = ".resid")) +
+    geom_point(alpha = 0.4, size = 5) + 
+    geom_hline(yintercept=0,
+               linetype="dashed", 
+               color = "red",
+               size = 1) +
+    theme(legend.position="bottom")
+
+print(res.fit.plot)
+
+# Get p.value
+
+sig <- anova(m.f) %>% 
+  tidy() %>%
+  mutate(index = variable,
+         group = group,
+         n = nrow(df)) 
+
+# Calculate coefficient
+model.coef <- m.f %>%
+      coef %>%
+      data.frame(coef = .) %>%
+      rownames_to_column("term") %>%
+      filter(term != "(Intercept)") %>%
+      # get coefficient that matters
+      filter(str_detect(term, "Days"))
+
+ # Calculate coefficient intervals
+model.coef.confi <- m.f %>%
+  confint() %>%
+  as.data.frame() %>%
+  set_colnames(c("conf.low", "conf.high")) %>%
+  rownames_to_column("term") %>%
+  filter(str_detect(term, "Days")) 
+
+r <-  sig %>%
+    left_join(model.coef, by = "term") %>%
+      left_join(model.coef.confi, by = "term")
+  return(r)
+}
+```
+
+
+### Perform tests
+```{r}
+alpha.stats <- NULL
+alpha.stats <- bind_rows(alpha.stats,
+                           do.lm(alpha,
+                                     "Chao1"))
+alpha.stats <- bind_rows(alpha.stats,
+                           do.lm(alpha,
+                                     "InvSimp"))
+```
+
+# Beta diversity
+
+
+The aim is to see if there is any difference in beta diversity due to time.
+
+##Making the plot
+
+```{r}
+mds <- micro.r %>%
+  vegdist('bray') %>%
+  metaMDS(.,autotransform = F)
+```
+
+## Visualize the NMDS plot
+
+
+```{r, fig.height=12, fig.width=12}
+
+mds$points %>%
+  data.frame() %>%
+  rownames_to_column("Seq.ID") %>%
+  inner_join(alpha) %>%
+  group_by(ParticipantID) %>%
+  arrange(collection.date) %>%
+  #plot
+  ggplot(aes(x= MDS1, y = MDS2)) +
+  #text
+  geom_text(aes(colour = ParticipantID, group = ParticipantID, label =  Days), size = 3) +
+  scale_shape_manual(values = c(16, 15)) +
+  # add arrow
+  geom_path(aes(group = ParticipantID, colour = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.4, "cm"),
+                          type = "open"),
+            size = 1.1, alpha = 0.3) +
+  #remove long legend
+  guides(colour=FALSE) +
+  #legend nicer, save space
+  theme(legend.position="bottom") %>%
+  labs(title = group)
+```
+
+```{r}
+beta.stats <-  adonis2(micro.r ~ ParticipantID + PC1 + Days, data = alpha, by = "terms") %>%
+  tidy() %>%
+  mutate(group = group,
+         method = "adonis.2")
+```
+
+
+## Save outputs
+
+```{r}
+paste0(d.out, "/", group, ".", stage , ".alpha.stats.tsv") %>%
+  write_tsv(alpha.stats, .)
+
+
+beta.stats <- beta.stats
+paste0(d.out, "/", group, ".", stage , ".beta.stats.tsv") %>%
+  write_tsv(beta.stats, .)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

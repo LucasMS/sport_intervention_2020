@@ -1,0 +1,319 @@
+---
+title: "Visualize and test step counts"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+I will visualize and test step counts.
+
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 16))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(reshape2)
+library(readODS)
+```
+# Import data
+
+```{r}
+meta <- "~/IKMB/projects/sport/data.clean/sampling.data.tsv" %>% 
+  read_tsv() %>% 
+  select(ParticipantID, Group, start.intervention, end.intervention, Age, Sex) %>% 
+  unique()
+
+steps <- "~/IKMB/projects/sport/data.clean/steps.tsv" %>% 
+  read_tsv()
+```
+
+# Add metadata
+
+```{r}
+steps <- steps %>% 
+  inner_join(meta, by = "ParticipantID")
+```
+
+## Add days
+
+```{r}
+steps <- steps %>% #
+  mutate(Date = as.Date(Date)) %>%
+  mutate(Days = Date - start.intervention + 20)  %>% 
+  filter(Steps != 0)
+```
+
+
+# Save data
+
+```{r}
+"steps.rds" %>% 
+  paste0(d.out, "/",.) %>% 
+  saveRDS(steps, .)
+```
+
+# Visualize group-wise
+
+```{r}
+steps.sum.participant <- steps %>%
+  group_by(Group, ParticipantID) %>% 
+  summarise(avg = mean(Steps), sd = sd(Steps), median = median(Steps)) %>% 
+  left_join(meta %>%  select(ParticipantID, Age, Sex), by  = "ParticipantID")
+
+steps.sum.participant  %>% 
+  ggplot(aes(x= Group, y = avg, color = Group)) +
+  geom_boxplot(coef = 6) +
+  geom_jitter() +
+  labs(y = "Average daily steps")
+```
+
+
+# Make formula to test
+
+```{r}
+do.lm <- function(df, variable){
+  
+  df <- df %>% 
+    filter(Group == variable)
+  
+  f.f <- as.formula("Steps ~ ParticipantID + Days")
+  
+  m.f <- lm(f.f, df)
+  
+  
+  res.fit.plot <- augment(m.f) %>% 
+    ggplot(aes_string(x = ".fitted", y = ".resid")) +
+    geom_point(alpha = 0.4, size = 5) + 
+    geom_hline(yintercept=0,
+               linetype="dashed", 
+               color = "red",
+               size = 1) +
+    theme(legend.position="bottom")
+  
+  print(res.fit.plot)
+  
+  # Get p.value
+  
+  sig <- anova(m.f) %>% 
+    tidy() %>%
+    mutate(index = variable,
+           n = nrow(df)) 
+  
+  # Calculate coefficient
+  model.coef <- m.f %>%
+    coef %>%
+    data.frame(coef = .) %>%
+    rownames_to_column("term") %>%
+    filter(term != "(Intercept)") %>%
+    # get coefficient that matters
+    filter(str_detect(term, "Days"))
+  
+  # Calculate get coefficient confint
+  model.coef.confi <- m.f %>%
+    confint() %>%
+    as.data.frame() %>%
+    magrittr::set_colnames(c("conf.low", "conf.high")) %>%
+    rownames_to_column("term") %>%
+    filter(str_detect(term, "Days")) 
+  
+  r <-  sig %>%
+    left_join(model.coef, by = "term") %>%
+    left_join(model.coef.confi, by = "term")
+  return(r)
+}
+
+```
+
+## Perform test
+
+# Intervention
+```{r}
+stats.results.int <- NULL
+stats.results.int <- bind_rows(stats.results.int,
+                               do.lm(steps %>%
+                                       filter(Date <= end.intervention),
+                                     "Strength"))
+stats.results.int <- bind_rows(stats.results.int,
+                               do.lm(steps %>%
+                                       filter(Date <= end.intervention),
+                                     "Endurance"))
+stats.results.int <- bind_rows(stats.results.int,
+                               do.lm(steps %>%
+                                       filter(Date <= end.intervention),
+                                     "Control"))
+stats.results.int
+```
+
+
+# After intervention
+
+```{r}
+stats.results.after <- NULL
+stats.results.after <- bind_rows(stats.results.after,
+                                 do.lm(steps %>%
+                                         filter((Date > end.intervention -15) &
+                                                  (Date < end.intervention +15)),
+                                       "Strength"))
+stats.results.after <- bind_rows(stats.results.after,
+                                 do.lm(steps %>%
+                                         filter((Date > end.intervention -15) &
+                                                  (Date < end.intervention +15)),
+                                       "Endurance"))
+stats.results.after <- bind_rows(stats.results.after,
+                                 do.lm(steps %>%
+                                         filter((Date > end.intervention -15) &
+                                                  (Date < end.intervention +15)),
+                                       "Control"))
+stats.results.after
+```
+
+# Combine tests
+
+```{r}
+stats <- bind_rows(stats.results.int %>%
+                     mutate(type = "intervention"),
+                   stats.results.after %>%
+                     mutate(type = "after"))
+```
+
+# Write results
+
+```{r}
+"stats.results.tsv" %>% 
+  paste0(d.out, "/", .) %>% 
+  write_tsv(stats, .)
+```
+
+# View statistical results 
+```{r}
+stats %>%
+  filter(p.value < 0.05,
+         term == "days.after.int")
+```
+
+# Plot
+##  Make label
+```{r}
+label.df <- stats %>%
+  filter(p.value < 0.05,
+         term == "days.after.int") %>% 
+  rename("Group" = "index") %>% 
+  mutate(label = "*") %>% 
+  select(Group, label, p.value) %>% 
+  arrange(Group) %>%
+   #add positions
+  mutate(hjustvar = 0) %>% 
+  mutate(vjustvar = 0.5,
+         vjustvar = vjustvar * 2) %>% 
+  mutate(xpos = -Inf) %>% 
+  mutate(ypos = Inf) %>% 
+  mutate(annotateText = paste0(" ",round(p.value, 3)))
+  
+```
+
+
+```{r}
+steps %>% 
+  ggplot(aes(x = Days, y = Steps)) +
+  facet_wrap(~ Group) + #Group ~ ParticipantID) +
+  geom_vline(xintercept = 0 + 20, 
+             color = "black",
+             size=0.3) +
+  geom_vline(xintercept = 42 + 20, 
+             color = "black",
+             size=0.5) +
+  ylim(low = min(steps$Steps), high = max(steps$Steps)) +
+  geom_point(alpha = 0.5, color = "grey70") +
+  geom_path(color = "grey70", aes(group = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.15, "cm"),
+                          type = "open"),
+            size = 0.5, alpha = 0.2) +
+  # Fit statistical model for the intervention
+  geom_smooth(data =steps %>%
+                filter(Date <= end.intervention),
+              method = "lm", aes(color = Group, fill=Group),
+              formula = lm(Steps ~ ParticipantID + Days, data = steps %>%
+                filter(Date <= end.intervention))$call %>% str()) +
+  
+  # Fit statistical model after intervention
+  geom_smooth(data = steps %>%
+                filter((Date > end.intervention -15) &
+                                                  (Date < end.intervention +15)),
+              method = "lm", aes(color = Group, fill=Group), linetype = "dashed",
+              formula = lm(Steps ~ ParticipantID + Days, data = steps %>%
+                filter((Date > end.intervention -15) &
+                                                  (Date < end.intervention +15)))$call %>% str()) +
+  geom_text(data=label.df,aes(x=xpos,y=ypos,hjust=hjustvar,vjust=vjustvar,label=annotateText, col = Group)) +
+  theme(legend.position = "none")
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

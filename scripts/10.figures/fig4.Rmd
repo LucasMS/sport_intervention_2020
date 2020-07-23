@@ -1,0 +1,334 @@
+---
+title: "Figure 4"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 8))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(RColorBrewer)
+library(reshape2)
+library(vegan)
+library(ggnewscale) # use two scales on the same plot
+```
+
+## Import data
+```{r}
+meta <- "~/IKMB/projects/sport/data.clean/sampling.data.tsv" %>%
+  read_tsv()
+micro.r <-  "~/IKMB/projects/sport/data.clean/micro.r.tsv" %>%
+  read.delim(stringsAsFactors = F)
+alpha <- "~/IKMB/projects/sport/data.clean/alpha.tsv" %>%
+  read_tsv()
+alpha.res <- "~/IKMB/projects/sport/analysis/25.to.publish/7.microbiome/alpha.summary.intervention.tsv" %>% 
+  read_tsv()
+beta.res <- "~/IKMB/projects/sport/analysis/25.to.publish/7.microbiome/beta.summary.intervention.tsv" %>% 
+  read_tsv()
+pa.res <- "~/IKMB/projects/sport/analysis/25.to.publish/7.microbiome/diff.abundnace.summary.intervention.tsv" %>% 
+  read_tsv()
+```
+
+
+# Filter data 
+
+## Metadata
+```{r}
+meta <- meta %>%
+  filter(Group != "Elite")
+```
+
+## Rarefied micro
+
+```{r}
+micro.r <- micro.r %>% 
+  rownames_to_column("Seq.ID") %>% 
+  right_join(meta %>% select(Seq.ID), by = "Seq.ID") %>% 
+  column_to_rownames("Seq.ID")
+micro.r <- micro.r[,colSums(micro.r)> 0]
+```
+
+# Alpha
+
+
+```{r}
+alpha <- alpha %>% 
+  right_join( meta)
+```
+
+## Make labels
+
+```{r}
+# Write beta summary
+alpha.label <- alpha.res %>% 
+  filter(p.value < 0.05) %>% 
+  rename("Group" = "group") %>%
+  rename("alpha.div" = "index") %>%
+  select(p.value, Group, alpha.div) %>% 
+  mutate(label = "*",
+         hjustvar = 0,
+         vjustvar = 1.1,
+         xpos = -Inf,
+         ypos = Inf,
+         annotateText = paste0(" ", round(p.value, 3), " (i)")) 
+
+```
+
+
+## Plot
+
+```{r, fig.width= 5, fig.height=2.5}
+to.plot.alpha <- alpha %>%
+  select(Chao1, InvSimp, Seq.ID) %>%
+  melt(variable.name = "alpha.div") %>% 
+  left_join(meta,
+            by = "Seq.ID") %>%
+  group_by(ParticipantID) %>%
+  arrange(Days) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Endurance", "Strength")))
+
+g1a <-  to.plot.alpha %>%
+  filter(alpha.div == "Chao1") %>% 
+  ggplot( aes(x = Days,
+              y = value), size = 0.5) +
+  geom_vline(xintercept = 0 + 20, 
+             color = "black",
+             alpha = 0.5,
+             size=0.5) +
+  geom_vline(xintercept = 42 + 20, 
+             color = "black",
+             alpha = 0.5,
+             size=0.5) +
+  geom_point(alpha = 0.2, size = 0.5) +
+  # Fit statistical model for the intervention
+  geom_smooth(data = to.plot.alpha %>%
+                filter(alpha.div == "Chao1") %>% 
+                filter(collection.date <= end.intervention),
+              method = "lm", aes(color = Group, fill=Group),
+              formula = lm(value ~ ParticipantID + Days, data = to.plot.alpha %>%
+                             filter(alpha.div == "Chao1") %>% 
+                             filter(collection.date <= end.intervention))$call %>% str()) +
+  # Fit statistical model after intervention
+  geom_smooth(data = to.plot.alpha %>%
+                filter(alpha.div == "Chao1") %>% 
+                filter((collection.date > end.intervention -15) &
+                         (collection.date < end.intervention +15)),
+              method = "lm", aes(color = Group, fill=Group), linetype = "dashed",
+              formula = lm(value ~ ParticipantID + Days, data = to.plot.alpha %>%
+                             filter(alpha.div == "Chao1") %>% 
+                             filter((collection.date > end.intervention -15) &
+                                      (collection.date < end.intervention +15)))$call %>% str()) +
+  geom_path(aes(group = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.15, "cm"),
+                          type = "open"),
+            size = 0.5, alpha = 0.2) +
+  theme(legend.position = "none") +
+  facet_wrap(~ Group, scales = "free") +
+  labs(x = "Days", y = "Chao1") +
+  geom_text(data = alpha.label %>% filter(alpha.div == "Chao1"),aes(x = xpos,
+                                                                    y = ypos,
+                                                                    hjust = hjustvar,
+                                                                    vjust = vjustvar,
+                                                                    label = annotateText,
+                                                                    col = Group))
+
+
+g1b <- to.plot.alpha %>%
+  filter(alpha.div == "InvSimp") %>% 
+  ggplot( aes(x = Days,
+              y = value), size = 0.5) +
+  geom_vline(xintercept = 0 + 20, 
+             color = "black",
+             alpha = 0.5,
+             size=0.5) +
+  geom_vline(xintercept = 42 + 20, 
+             color = "black",
+             alpha = 0.5,
+             size=0.5) +
+  geom_point(alpha = 0.2, size = 0.5) +
+  # Fit statistical model for the intervention
+  geom_smooth(data = to.plot.alpha %>%
+                filter(alpha.div == "InvSimp") %>% 
+                filter(collection.date <= end.intervention),
+              method = "lm", aes(color = Group, fill=Group),
+              formula = lm(value ~ ParticipantID + Days, data = to.plot.alpha %>%
+                             filter(alpha.div == "Chao1") %>% 
+                             filter(collection.date <= end.intervention))$call %>% str()) +
+  # Fit statistical model after intervention
+  geom_smooth(data = to.plot.alpha %>%
+                filter(alpha.div == "InvSimp") %>% 
+                filter((collection.date > end.intervention -15) &
+                         (collection.date < end.intervention +15)),
+              method = "lm", aes(color = Group, fill=Group), linetype = "dashed",
+              formula = lm(value ~ ParticipantID + Days, data = to.plot.alpha %>%
+                             filter(alpha.div == "Chao1") %>% 
+                             filter((collection.date > end.intervention -15) &
+                                      (collection.date < end.intervention +15)))$call %>% str()) +
+  geom_path(aes(group = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.15, "cm"),
+                          type = "open"),
+            size = 0.5, alpha = 0.2) +
+  theme(legend.position = "none") +
+  facet_wrap(~ Group, scales = "free") +
+  labs(x = "Days", y = "InvSimp") +
+  geom_text(data = alpha.label %>% filter(alpha.div == "InvSimp"),aes(x = xpos,
+                                                                      y = ypos,
+                                                                      hjust = hjustvar,
+                                                                      vjust = vjustvar,
+                                                                      label = annotateText,
+                                                                      col = Group))
+
+```
+
+
+# Beta
+
+## Make labels
+
+```{r}
+# Write beta summary
+beta.label <- beta.res %>% 
+  filter(p.value < 0.05) %>% 
+  filter(term == "Days") %>% 
+  rename("Group" = "group") %>%
+  select(p.value, Group) %>% 
+  mutate(label = "*",
+         hjustvar = 0,
+         vjustvar = 1.1,
+         xpos = -Inf,
+         ypos = Inf,
+         annotateText = paste0(" ", round(p.value, 3))) 
+
+```
+
+
+## Calculate MDS
+
+```{r}
+mds <- micro.r %>%
+  vegdist('bray') %>%
+  metaMDS(.,autotransform = F, trymax = 999)
+```
+
+
+## Plot
+
+```{r}
+g2 <- mds$points %>%
+  data.frame() %>%
+  rownames_to_column("Seq.ID") %>%
+  inner_join(meta, by = "Seq.ID") %>%
+  group_by(ParticipantID) %>%
+  arrange(collection.date) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Endurance", "Strength", "Extreme"))) %>% 
+  filter( Days <= 62) %>% 
+  #plot
+  ggplot(aes(x= MDS1, y = MDS2)) +
+  geom_text(aes(colour = Group, group = ParticipantID, label = Days), size = 2) +
+  scale_shape_manual(values = c(16, 15)) +
+  # add arrow
+  geom_path(aes(group = ParticipantID, colour = Group),
+            stat = "identity",
+            arrow = arrow(length = unit(0.2, "cm"),
+                          type = "open"),
+            size = 0.8, alpha = 0.3) +
+  #facet
+  facet_wrap(~ Group, nrow = 1) +
+  #remove long legend
+  guides(colour=FALSE) +
+  #legend nicer, save space
+  theme(legend.position="bottom") +
+  geom_text(data = beta.label,aes(x = xpos,
+                                  y = ypos,
+                                  hjust = hjustvar,
+                                  vjust = vjustvar,
+                                  label = annotateText,
+                                  col = Group))
+```
+
+
+
+# Combine plots
+
+```{r, fig.height= 7, fig.width=5.6}
+g1 <- ggarrange(g1a,g1b, labels = c("A", "B"), nrow = 2, ncol = 1)
+ggarrange(g1,g2,common.legend = T,
+          legend = "bottom", 
+          labels = c("","C"), 
+          nrow = 2, 
+          ncol = 1, 
+          heights = c(15, 8))
+```
+
+
+
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,316 @@
+---
+title: "Summary of group-based analysis"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  stage: "intervention"
+---
+
+
+# Introduction
+
+I will gather group-based analyses for variations in food intake along time.
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+stage <- params$stage
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+
+```
+
+## Import data
+```{r}
+d.in <- '/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/6.diet'
+
+d.in.data <- "~/IKMB/projects/sport/data.clean" 
+
+meta <- "sampling.data.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+
+dic <- "diet.dic.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+
+diet <- "diet.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+```
+
+# Add metadata to diet data
+
+```{r}
+diet.meta <- diet %>% 
+  inner_join(meta,
+             by = c("Seq.ID", "ParticipantID"))
+```
+
+
+
+# Individual dietary components
+
+## Get results
+```{r, echo = T, results = 'hide', message=F}
+intake <- list.files(path = d.in,
+                     pattern = paste0("intake.stats.", stage, ".tsv")) %>%
+  paste0(d.in, "/", .) %>%
+  map(read_tsv) %>%
+  do.call("bind_rows", .) %>%
+  arrange(p.value)
+```
+
+## Include only the results for Days
+```{r}
+intake <- intake %>%
+  filter(term == "Days") 
+```
+
+
+## Plot results for figure
+```{r, fig.height= 8, fig.width=8}
+g1 <- intake %>%
+  filter(term == "Days") %>% 
+  filter(group %in% c("Control", "Endurance", "Strength") ) %>% 
+  filter(!is.na(p.value)) %>%
+  mutate(Group = factor(group, levels = c("Control", "Endurance", "Strength"))) %>% 
+  mutate(Direction = if_else(coef > 0 ,
+                             "increase",
+                             "decrease"),
+         Direction = if_else(is.na(Direction),
+                             "absent",
+                             Direction),
+         Direction = factor(Direction, levels = c("decrease",
+                                                  "increase",
+                                                  "absent")),
+         Coefficient = abs(coef)) %>%
+  mutate(intake = str_wrap(intake, 20)) %>% 
+  
+  ggplot(., aes(x = intake, y = 1 - padj)) +
+  geom_point(alpha = 0.8, size =0.1) +
+  geom_point(alpha = 0.8, aes(color = Group,
+                              size = Coefficient,
+                              shape = Direction)) +
+  geom_hline(yintercept = 0.95, linetype="dashed") +
+  labs(x = "Dietary component", y = " 1 - adjusted P")+
+  ggpubr::rotate_x_text() 
+g1
+```
+
+## View Significants
+
+```{r}
+intake %>%
+  filter(term == "Days") %>% 
+  select(intake, group, coef, everything()) %>% 
+  filter(padj < 0.05) %>% 
+  arrange(group)
+```
+
+# Plot the data
+
+## make label
+```{r}
+label.df <- intake %>%
+  filter(term == "Days") %>% 
+  select(intake, group, coef, everything()) %>% 
+  filter(padj < 0.05) %>% 
+  arrange(group) %>% 
+  rename("Group" = "group") %>% 
+  mutate(label = "*") %>% 
+  select(Group, label, padj) %>% 
+  arrange(Group) %>%
+  #add positions
+  mutate(hjustvar = 0) %>% 
+  mutate(vjustvar = 0.5,
+         vjustvar = vjustvar * 2) %>% 
+  mutate(xpos = -Inf) %>% 
+  mutate(ypos = Inf) %>% 
+  mutate(annotateText = paste0(" ",round(padj, 3), " (i)"))
+
+
+```
+
+
+```{r}
+g2 <- diet.meta %>% 
+  select(Mcc.p.2e2ssoh, ParticipantID, Group, Date, Days) %>% 
+  ggplot(aes(x = Days, y = Mcc.p.2e2ssoh)) +
+  facet_wrap(~ Group) + #Group ~ ParticipantID) +
+  geom_vline(xintercept = 0 + 20, 
+             color = "black",
+             size=0.3) +
+  geom_vline(xintercept = 42 + 20, 
+             color = "black",
+             size=0.5) +
+  ylim(low = min(diet.meta$Mcc.p.2e2ssoh), high = max(diet.meta$Mcc.p.2e2ssoh)) +
+  geom_point(alpha = 0.5, color = "grey70") +
+  geom_path(color = "grey70", aes(group = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.15, "cm"),
+                          type = "open"),
+            size = 0.5, alpha = 0.2) +
+  # Fit statistical model for the intervention
+  geom_smooth(data = diet.meta %>%
+                filter(Date <= end.intervention),
+              method = "lm", aes(color = Group, fill=Group),
+              formula = lm(Mcc.p.2e2ssoh ~ ParticipantID + Days,
+                           data = diet.meta %>%
+                             filter(Date <= end.intervention))$call %>% str()) +
+  
+  # Fit statistical model after intervention
+  geom_smooth(data = diet.meta %>%
+                filter((Date > end.intervention -15) &
+                         (Date < end.intervention +15)),
+              method = "lm", aes(color = Group, fill=Group), linetype = "dashed",
+              formula = lm(Mcc.p.2e2ssoh ~ ParticipantID + Days, 
+                           data = diet.meta %>%
+                             filter((Date > end.intervention -15) &
+                                      (Date < end.intervention +15)))$call %>% 
+                str()) +
+  labs(x = "Days", y = "Meat cold cuts\n(1 portion = 20g)") +
+  geom_text(data=label.df,aes(x = xpos,
+                              y = ypos,
+                              hjust = hjustvar,
+                              vjust = vjustvar,
+                              label = annotateText, 
+                              col = Group)) +
+  theme(legend.position = "none")
+g2
+```
+
+
+
+# Combine PC1 results
+
+```{r}
+intake <- list.files(path = d.in,
+                     pattern = paste0("intake.pca.", stage, ".tsv")) %>%
+  paste0(d.in, "/", .) %>%
+  map(read_tsv) %>%
+  do.call("bind_rows", .) %>% 
+  filter(group != "Extreme") %>% 
+  mutate(term = case_when(term == "ParticipantID" ~ "Participant ID",
+                          term == "Days" ~ "Days")) %>% 
+  select(group, term, everything(), -index )
+colnames(intake) <- str_to_sentence(colnames(intake))
+
+colnames(intake) <- str_replace(colnames(intake), "\\.", " ") 
+
+colnames(intake) <- str_replace(colnames(intake), "Pct explained", "Explained (%)") 
+
+kable(intake, digits = 3)
+
+```
+
+# Plot coefs
+
+```{r}
+label.df <- intake %>%
+  filter(Term == "Days") %>% 
+  filter(`P value` < 0.05) %>% 
+  arrange(Group) %>% 
+  mutate(label = "*") %>% 
+  select(Group, label,`P value`) %>% 
+  arrange(Group) %>%
+  #add positions
+  mutate(vjustvar = 1) %>% 
+  mutate(hjustvar = -1) %>% 
+  mutate(ypos = -Inf) %>% 
+  mutate(xpos = Inf) %>% 
+  mutate(annotateText = paste0(" ",round(`P value`, 3), " (i)"))
+
+
+
+g3 <- intake %>% 
+  filter(Term == "Days") %>% 
+  ggplot(aes(x = Group, y = Coef,color = Group)) +
+  geom_point() +
+  coord_flip() +
+  geom_errorbar(aes(ymin=`Conf low`, ymax=`Conf high`), width=.2,
+                position=position_dodge(.9)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Coefficient") +
+  geom_text(data=label.df,aes(x=xpos,y=ypos,hjust=hjustvar,vjust=vjustvar,label=annotateText, col = Group)) +
+  theme(legend.position = "none") +
+  labs(y = "PC1\nβ coefficient", x = "Group")
+g3
+```
+
+# Save plots
+
+```{r}
+paste0("plots.", stage, ".rds") %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(list(g1,g2,g3), .)
+
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

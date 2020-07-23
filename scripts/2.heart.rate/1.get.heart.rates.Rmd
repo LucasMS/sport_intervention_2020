@@ -1,0 +1,161 @@
+---
+title: "Visualize heart rate"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+
+I will visualize heart rate data.
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 16))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+   scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(broom)
+library(reshape2)
+```
+# Import data
+
+```{r}
+meta <- "~/IKMB/projects/sport/data.clean/sampling.data.tsv" %>% 
+  read_tsv() %>% 
+  select(ParticipantID, Group, Age, Sex, start.intervention, end.intervention) %>% 
+  unique()
+
+heart <- "~/IKMB/projects/sport/data.clean/heart.rate.tsv" %>% 
+  read_tsv()
+```
+
+
+# Add metadata
+
+```{r}
+heart  <- heart %>%
+  inner_join(meta, by = "ParticipantID") %>% 
+  group_by(ParticipantID) %>% 
+  #Set maxium heart rage. See https://doi.org/10.1016/j.ahj.2015.12.006  and 10.1016/s0735-1097(00)01054-8 for references. I will use the formula of the later, tanaka at the JACC
+  mutate(APHRM = 208 - (0.7 * Age)) %>% # Age predicted HRmax
+  mutate(heart.rate.pc = (heart_rate *100) / APHRM) %>% 
+  mutate(plus85 = if_else(heart.rate.pc > 85,
+                          1,
+                          0)) %>% 
+  # Keep only period during intervention
+  filter((Date >= start.intervention) & (Date <= end.intervention))
+```
+
+#Summarize by group and participant
+```{r}
+heart.sum.participant <- heart %>%
+  group_by(ParticipantID, Group) %>% 
+  summarise(total.point = n(),
+            plus85.sum = sum(plus85)/60,
+            Age = unique(Age),
+            APHRM = unique(APHRM),
+            max.HR = max(heart_rate))
+```
+
+# Total data points
+```{r}
+heart.sum.participant %>% 
+  ggplot(aes(x= Group, y = total.point )) +
+  geom_boxplot()
+```
+
+
+# Cumulated exercise intensity
+
+## > 85% APHRM
+```{r}
+heart.sum.participant %>% 
+  ggplot(aes(x= Group, y = plus85.sum, color = Group)) +
+  geom_boxplot(coef = 6) +
+  geom_jitter() +
+  scale_y_log10() +
+  labs(y = "Hours at >85% APHRM")
+```
+
+
+```{r}
+heart.sum.participant %>% 
+  group_by(Group) %>% 
+  summarise(sd = sd(plus85.sum),median = median(plus85.sum), avg = mean(plus85.sum)) %>% 
+  arrange(median, sd, avg) %>% 
+  mutate(view = paste0(round(avg,2), "±", round(sd,2)))
+```
+
+
+# Save
+
+```{r}
+"heart.sum.participant.rds" %>% 
+  paste0(d.out, "/", .) %>% 
+  saveRDS(heart.sum.participant, .)
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,241 @@
+---
+title: "Summary of group-based analysis"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  stage: "intervention"
+---
+
+
+# Introduction
+
+I will gather group-based analyses for variations in microbiome along time.
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+```
+
+## Import data
+```{r}
+d.in <- '/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/7.microbiome'
+d.in.data <- "~/IKMB/projects/sport/data.clean"
+meta <- "sampling.data.tsv" %>%
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+tax <- "tax.tsv"  %>%
+  paste0(d.in.data, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+micro <-"micro.tsv" %>%
+  paste0(d.in.data, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+```
+# Set period
+
+```{r}
+stage <- params$stage
+```
+
+
+# Alpha diversity
+
+## Get results
+```{r}
+alpha <- list.files(path = d.in,
+                    pattern = paste0(stage,".alpha.stats.tsv")) %>%
+  paste0(d.in, "/", .) %>%
+  map(read_tsv) %>%
+  do.call("bind_rows", .) %>%
+  filter(term == "Days") %>% 
+  arrange(p.value)
+```
+
+
+## Plot results
+ Plot results (p-values) from the tests.
+```{r}
+alpha %>%
+  filter(!is.na(p.value)) %>%
+  mutate(Group = factor(group, levels = c("Control", "Endurance", "Strength"))) %>% 
+  mutate(Direction = if_else(coef > 0 ,
+                             "increase",
+                             "decrease"),
+         Coefficient = abs(coef)) %>%
+  ggplot(., aes(x = index, y = 1 - p.value)) +
+  geom_jitter(alpha = 0.5, aes(color = Group,
+                               size = Coefficient,
+                               shape = Direction),
+              width = 0.1) +
+  geom_hline(yintercept = 0.95, linetype="dashed") +
+  labs(title = "Effect of time on alpha diversity",
+       x = "Alpha diversity")
+```
+
+## View Significants
+
+```{r}
+alpha %>%
+  filter(p.value < 0.05)
+```
+
+
+# Write alpha summary
+
+```{r}
+paste0("alpha.summary.",stage,".tsv") %>% 
+  paste0(d.out, "/", .) %>% 
+  write_tsv(alpha, .)
+```
+
+# Beta diversity
+
+## Get results
+```{r}
+beta <- list.files(path = d.in,
+                    pattern = paste0(stage, ".beta.stats.tsv")) %>%
+  paste0(d.in, "/", .) %>%
+  map(read_tsv) %>%
+  do.call("bind_rows", .) %>%
+  arrange(p.value)
+```
+
+## Plot results
+
+Plot results (p-values) from the tests.
+```{r, fig.width= 3}
+beta %>%
+  filter(term == "Days") %>% 
+  filter(!is.na(p.value)) %>%
+  mutate(group = factor(group, levels = c("Control", "Endurance", "Strength"))) %>% 
+ggplot(aes(x = group, y = 1 - p.value)) +
+  geom_point(alpha = 0.5, size = 3) +
+  geom_hline(yintercept = 0.95, linetype="dashed") +
+  ggpubr::rotate_x_text() +
+  labs(title = "Effect of time\non beta-diversity",
+       x = "Groups") +
+  theme(legend.position = "none")
+```
+
+## View Significants
+
+```{r}
+beta %>%
+  filter(p.value < 0.05)
+```
+
+# Write beta summary
+
+```{r}
+paste0("beta.summary.",stage,".tsv") %>% 
+  paste0(d.out, "/", .) %>% 
+  write_tsv(beta, .)
+```
+
+# ASVs that change along time
+
+## Get results
+```{r}
+difab <- list.files(path = d.in,
+                    pattern = paste0(stage, ".dseq.res.stats.tsv")) %>%
+  paste0(d.in, "/", .) %>%
+  map(read_tsv) %>%
+  do.call("bind_rows", .) %>%
+  arrange(padj)
+```
+
+## Plot results
+
+Plot results (p-values) from the tests.
+```{r}
+difab %>% 
+  mutate(Genus = gsub("_sensu_stricto", "", Genus)) %>% 
+  mutate(group = factor(group, levels = c("Control", "Endurance", "Strength"))) %>% 
+ggplot(aes(x = group, index, y = 1 - padj)) +
+  geom_jitter(data = difab %>%  filter(padj >= 0.05) %>% 
+                mutate(group = factor(group, levels = c("Control", "Endurance", "Strength"))),
+              alpha = 0.5, width = 0.1, color = "black") +
+  geom_jitter(data = difab %>%
+                mutate(Direction =  if_else(log2FoldChange > 0 ,
+                             "increase",
+                             "decrease")) %>% 
+                filter(padj < 0.05) %>% 
+                mutate(Genus = gsub("_sensu_stricto", "", Genus)) %>% 
+  mutate(group = factor(group, levels = c("Control", "Endurance", "Strength"))),
+              alpha = 0.5, width = 0.1, aes(color = Genus,
+                                            size = baseMean,
+                                            shape = Direction)) +
+  geom_hline(yintercept = 0.95, linetype="dashed") +
+  ggpubr::rotate_x_text() +
+  labs(title = "ASVs that vary along time",
+       x = "Group")
+```
+
+## View Significants
+
+```{r}
+difab %>%
+  filter(padj < 0.05)
+```
+
+# Write differential abudance summary
+
+```{r}
+paste0("diff.abundnace.summary.", stage, ".tsv") %>% 
+  paste0(d.out, "/", .) %>% 
+  write_tsv(difab, .)
+```
+# Session info
+```{r}
+sessionInfo()
+```

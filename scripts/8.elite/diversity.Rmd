@@ -1,0 +1,323 @@
+---
+title: "Run comparison between microbiomes' diversity of elite participants and matched others"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+
+# Introduction
+Compare microbiome diversity between elite and matched others
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 5,
+               fig.width = 4 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(vegan)
+library(reshape2)
+library(broom) # plotting residuas vs fit nicely
+library(spaa) #convert dist to list
+library(stats)
+```
+
+## Import data
+```{r}
+d.in <- "~/IKMB/projects/sport/data.clean"
+
+meta <- "elite.group.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read_tsv()
+micro <-  "micro.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+micro.r <- "micro.r.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read.delim(stringsAsFactors = F)
+alpha <- "alpha.tsv" %>%
+  paste0(d.in, "/", .) %>% 
+  read_tsv()
+pca <- "~/IKMB/projects/sport/analysis/25.to.publish/6.diet/pca.rds" %>% 
+  readRDS()
+
+```
+#Meta
+```{r}
+meta <- meta %>% 
+  inner_join(pca, by = "Seq.ID")
+```
+
+# Filter data for group and period
+
+## Filter microbiome
+
+```{r}
+micro <- micro %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro <- micro[,colSums(micro)> 0]
+
+micro.r <- micro.r %>%
+  rownames_to_column("rownames") %>% # match microbiome data with meta
+  left_join(data.frame(rownames = meta$Seq.ID),
+            .,
+            by = "rownames") %>%
+  column_to_rownames("rownames")
+micro.r <- micro.r[,colSums(micro.r)> 0]
+```
+
+## Filter alpha diversity
+
+```{r}
+alpha <- alpha %>%
+  right_join(., meta, by = "Seq.ID")
+```
+
+
+# Alpha diversity
+
+
+```{r}
+alpha <- alpha %>%
+  right_join(., meta)
+```
+
+## Select alpha tests
+
+```{r}
+alpha.indices <- c("Chao1", "InvSimp")
+```
+
+## Visualize
+
+
+```{r}
+alpha %>%
+  select(!!alpha.indices, Group) %>%
+  melt() %>%
+  dplyr::rename("alpha.div" = "variable") %>%
+  ggplot(., aes(x = Group,
+                     y = value,
+                     color = Group)) +
+  geom_boxplot(coef = 6) +
+  geom_jitter() +
+  theme(legend.position = "bottom") +
+  facet_wrap(~ alpha.div, scales = "free") +
+  labs(y = "Index")
+#Save plotting info
+paste0(d.out, "/", "to.plot.alpha.rds") %>%
+  saveRDS(alpha, .)
+```
+
+
+### Prepare function to test
+
+
+```{r}
+do.lm.test <- function(data, variable){
+    df <- data %>%
+    # Arrange, so the pairs can be recognized by the test
+      arrange(ParticipantID) %>%
+      arrange(Group)
+    # Perform test
+    #include ParticipantID in the formula because I have people that contributed with more samples than others
+    f <- as.formula(paste("log(", variable,")", "~ PC1 + Group"))
+    model <- lm(f, data = df) 
+    sig <- anova(model) %>% 
+      tidy() %>%
+    mutate(index = variable,
+           anova = "type I")
+    # Calculate get coefficient
+    model.coef <- model %>% 
+      coef %>%
+      data.frame(coef = .) %>% 
+      rownames_to_column() %>%
+      filter(rowname == "GroupElite") %>% 
+      rename("coef.term" = "rowname")
+      # Calculate get coefficient confint
+    model.coef.confi <- model %>%
+      confint() %>%
+      as.data.frame() %>% 
+      magrittr::set_colnames(c("conf.low", "conf.high")) %>% 
+      rownames_to_column() %>%
+      filter(rowname == "GroupElite") %>% 
+      select(-rowname)
+    
+
+  # Gather results
+      r <- sig %>%
+        filter(term == "Group") %>% 
+        bind_cols(model.coef, model.coef.confi)
+
+      return(r)
+}
+
+```
+
+
+### Perform tests
+```{r}
+alpha.stats <- NULL
+for (i in alpha.indices){
+  alpha.stats <- bind_rows(alpha.stats,
+                             do.lm.test(alpha,
+                                       i))
+}
+```
+
+### View tests
+
+```{r}
+alpha.stats
+```
+
+# Beta diversity
+
+
+The aim is to see if there is any difference in beta diversity due to time.
+
+##Making the plot
+
+```{r}
+mds <- micro.r %>%
+  vegdist('bray') %>%
+  metaMDS(.,autotransform = F)
+```
+
+## Visualize the NMDS plot
+
+
+```{r, fig.height=12, fig.width=12}
+
+to.plot.beta <- mds$points %>%
+  data.frame() %>%
+  rownames_to_column("Seq.ID") %>%
+  inner_join(alpha) %>%
+  mutate(ParticipantID = factor(ParticipantID))
+to.plot.beta %>% 
+  #plot
+  ggplot(aes(x= MDS1, y = MDS2, colour =Group, group = ParticipantID)) +
+  geom_point(aes(colour = Group), size = 3) +
+  # add arrow
+  geom_line(alpha =0.4, size = 2.5) +
+  #legend nicer, save space
+  theme(legend.position="bottom")
+#Save plotting info
+paste0(d.out, "/", "to.plot.beta.rds") %>%
+  saveRDS(to.plot.beta, .)
+```
+
+## Stats
+
+### Get distances
+
+```{r}
+dis <- micro.r %>%
+  vegdist('bray') 
+```
+### Perform stats
+
+```{r}
+beta.stats <-  adonis2(dis ~ PC1 + Group , data = alpha, by = "terms") %>% 
+  tidy() %>% 
+  mutate(stat.type = "F",
+         method = "adonis.2")
+```
+
+### Perform stats
+
+```{r}
+beta.disp <-  betadisper(dis, factor(alpha$Group), bias.adjust = T) %>% 
+  permutest(pairwise = F, permutations = 999) %>% 
+  .[["tab"]] %>% 
+  data.frame() %>%
+  rename("p.value" = "Pr..F.",
+         "permutations" = "N.Perm",
+         "statistic" = "F",
+        "SumOfSqs" = "Sum.Sq",
+        "df" = "Df") %>% 
+  rownames_to_column("term") %>% 
+  mutate(stat.type = "F",
+         method = "betadisper.permutest")
+```
+
+
+
+### View tests
+
+```{r}
+beta.stats
+beta.disp
+```
+
+## Save outputs
+
+```{r}
+paste0(d.out, "/", "alpha.stats.tsv") %>%
+  write_tsv(alpha.stats, .)
+
+paste0(d.out, "/", "beta.stats.tsv") %>%
+  write_tsv(beta.stats, .)
+
+paste0(d.out, "/","beta.disp.tsv") %>%
+  write_tsv(beta.disp, .)
+
+
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

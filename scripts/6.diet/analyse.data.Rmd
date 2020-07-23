@@ -1,0 +1,347 @@
+---
+title: "Analyse diet"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+  group: "Endurance"
+  stage: "after"
+---
+
+
+# Introduction
+ I will analyze the change in diet patterns within each group.
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 14))
+
+# Set seed for reproducibility
+set.seed(13)
+
+# Set output directory
+d.out <- params$d.out
+```
+
+## Set working group
+```{r}
+group <- params$group
+stage <- params$stage
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(MASS)
+library(ggplot2)
+library(tidyverse)
+library(vegan)
+library(reshape2)
+library(broom) # plotting residuas vs fit nicely
+library(spaa) #convert dist to list
+library(plotrix) # calculates standard error
+library(factoextra)
+
+```
+
+## Import data
+```{r}
+d.in.pca <- "~/IKMB/projects/sport/analysis/25.to.publish/6.diet"
+
+d.in.data <- "~/IKMB/projects/sport/data.clean" 
+
+pca <- "pca.rds" %>% 
+  paste0(d.in.pca, "/", .) %>% 
+  readRDS()  
+
+meta <- "sampling.data.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+
+dic <- "diet.dic.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+
+diet <- "diet.tsv" %>% 
+  paste0(d.in.data, "/", .) %>% 
+  read_tsv()
+```
+
+# Edit dictionary for a nice output
+```{r}
+dic <- dic %>% 
+  separate(question, into = c("intake", "trash"), sep = " \\(", remove = F) %>% 
+  dplyr::select(-trash)
+```
+
+# Add group information
+
+```{r}
+diet <- diet %>% 
+  inner_join(meta,
+             by = c("Seq.ID", "ParticipantID"))
+```
+
+
+# Filter for group and period
+```{r}
+if(stage == "intervention"){
+diet <- diet %>%
+  filter(Group == group) %>% 
+  filter(Date <= end.intervention)
+}
+
+if(stage == "after"){
+diet <- diet %>%
+  filter(Group == group) %>% 
+  filter((Date > end.intervention -15) &
+           (Date < end.intervention +15))
+}
+```
+
+# Remove points with missing diet info
+
+```{r}
+diet <- diet %>% 
+  filter(diet %>% 
+           select(dic %>%
+                    pull(variable)) %>% 
+           complete.cases())
+```
+
+# Organize dieta data
+
+## Get metadata and diet information
+
+```{r}
+diet.meta <- diet
+```
+
+## Get data only with diet 
+
+```{r}
+diet <- diet %>% 
+  select(dic %>%
+           pull(variable) %>% 
+           c("Seq.ID",.)) %>% 
+  column_to_rownames("Seq.ID")
+```
+
+## View data
+```{r}
+diet %>%
+  rownames_to_column("Seq.ID") %>% 
+  melt(variable.name = "diet") %>%
+  left_join(meta,
+            by = "Seq.ID") %>%
+  left_join(dic, by  = c("diet" = "variable")) %>% 
+  rename("food" = "question") %>% 
+  group_by(ParticipantID) %>%
+  arrange(Days) %>% 
+  ggplot(., aes(x = Days,
+                     y = value,
+                color = ParticipantID)) +
+  geom_point() +
+  geom_smooth(method = "lm", aes(group = intake)) +
+  geom_path(aes(group = ParticipantID),
+            stat = "identity",
+            arrow = arrow(length = unit(0.15, "cm"),
+                          type = "open"),
+            size = 0.5, alpha = 0.3) +
+  theme(legend.position = "none") +
+  facet_wrap(~ intake, scales = "free") +
+  labs(title = group)
+
+```
+# PCA
+
+```{r}
+pc.diet.meta <- pca %>% 
+  right_join(diet.meta, by = "Seq.ID")
+
+# Is it normally distributed?
+hist(pc.diet.meta$PC1)
+
+# Test
+f <- as.formula(paste("PC1", "~", "ParticipantID + Days"))
+
+m.f <- lm(f, pc.diet.meta)
+
+res.fit.plot <- augment(m.f) %>% 
+    ggplot(aes_string(x = ".fitted", y = ".resid")) +
+    geom_point(alpha = 0.4, size = 5) + 
+    geom_hline(yintercept=0,
+               linetype="dashed", 
+               color = "red",
+               size = 1) +
+    theme(legend.position="bottom")
+res.fit.plot
+
+sig <- anova(m.f) %>% 
+  tidy() %>%
+  mutate(index = "PC1",
+         group = group,
+         n = nrow(meta)) 
+
+model.coef <- m.f %>%
+      coef %>%
+      data.frame(coef = .) %>%
+      rownames_to_column("term") %>%
+      filter(term != "(Intercept)") %>%
+      # get coefficient that matters
+      filter(str_detect(term, "Days"))
+
+model.coef.confi <- m.f %>%
+  confint() %>%
+  as.data.frame() %>%
+  magrittr::set_colnames(c("conf.low", "conf.high")) %>%
+  rownames_to_column("term") %>%
+  filter(str_detect(term, "Days")) 
+
+sig <- sig %>%
+    left_join(model.coef, by = "term") %>%
+      left_join(model.coef.confi, by = "term")
+sig
+```
+
+## Save PCA
+
+```{r}
+paste0(d.out, "/", group, ".intake.pca.", stage, ".tsv") %>%
+  write_tsv(sig, .)
+
+```
+
+# Stats
+The aim is to see if there is any difference in food intake along time. 
+```{r}
+do.lm <- function(df, variable){
+
+f.f <- as.formula(paste("log(", variable, "+1)", "~", "ParticipantID + Days"))
+
+m.f <- lm(f.f, df)
+
+
+res.fit.plot <- augment(m.f) %>% 
+    ggplot(aes_string(x = ".fitted", y = ".resid")) +
+    geom_point(alpha = 0.4, size = 5) + 
+    geom_hline(yintercept=0,
+               linetype="dashed", 
+               color = "red",
+               size = 1) +
+    theme(legend.position="bottom")
+
+print(res.fit.plot)
+
+# Get p.value
+
+sig <- anova(m.f) %>% 
+  tidy() %>%
+  mutate(index = variable,
+         group = group,
+         n = nrow(df)) 
+
+# Calculate coefficient
+model.coef <- m.f %>%
+      coef %>%
+      data.frame(coef = .) %>%
+      rownames_to_column("term") %>%
+      filter(term != "(Intercept)") %>%
+      # get coefficient that matters
+      filter(str_detect(term, "Days"))
+
+ # Calculate get coefficient confint
+model.coef.confi <- m.f %>%
+  confint() %>%
+  as.data.frame() %>%
+  magrittr::set_colnames(c("conf.low", "conf.high")) %>%
+  rownames_to_column("term") %>%
+  filter(str_detect(term, "Days")) 
+
+r <-  sig %>%
+    left_join(model.coef, by = "term") %>%
+      left_join(model.coef.confi, by = "term")
+  return(r)
+}
+```
+
+## Perform tests
+
+```{r}
+stats.results <- NULL
+for (i in colnames(diet)){
+stats.results <- bind_rows(stats.results,
+                           do.lm(diet.meta,
+                                     i))}
+```
+
+## Add information
+
+```{r}
+stats.results <- stats.results %>% 
+  left_join(dic, by = c("index" = "variable")) %>% 
+  dplyr::select(intake, everything())
+```
+
+
+## Adjust p-value
+
+```{r}
+stats.results <- stats.results %>% 
+  group_by(term) %>% 
+  mutate(padj = p.adjust(p.value, "fdr")) %>% 
+  dplyr::select(intake, p.value, padj, everything()) %>% 
+  arrange(padj)
+```
+
+# Save
+
+```{r}
+
+paste0(d.out, "/", group, ".intake.stats.", stage, ".tsv") %>%
+  write_tsv(stats.results, .)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

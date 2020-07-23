@@ -1,0 +1,185 @@
+---
+title: "Figure 2"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 10))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+```
+
+## Import data
+```{r}
+biometrics <- "/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/4.biometrics/figure.elements.rds" %>% 
+  readRDS()
+blood <- '/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/5.blood/figure.elements.rds' %>% 
+  readRDS()
+```
+
+
+# Combine elements
+
+```{r}
+biometrics.data <- biometrics[[1]] %>% mutate(Metric = "Biometric profile")
+biometrics.label.df <- biometrics[[2]] %>% mutate(Metric = "Biometric profile")
+blood.data <- blood[[1]] %>% mutate(Metric = "Blood profile")
+blood.label.df <- blood[[2]] %>% mutate(Metric = "Blood profile")
+
+df <- blood.data %>% 
+  bind_rows(biometrics.data) %>% 
+  ungroup() %>% 
+  mutate(Test = if_else(Test == "Hip circunference",
+                        "Hip circ.",
+                        Test)) %>% 
+  mutate(Test = if_else(Test == "PWC (Km/h)",
+                        "PWC (km/h)",
+                        Test))
+
+
+label.df <- bind_rows(biometrics.label.df, blood.label.df) %>% 
+  mutate(vjustvar = if_else(vjustvar == 3,
+                            1.1,
+                            vjustvar),
+         vjustvar = if_else(vjustvar == 5,
+                            2.2,
+                            vjustvar),
+         vjustvar = if_else(vjustvar == 7,
+                            3.3,
+                            vjustvar)) %>% 
+  mutate(annotateText = gsub("adj.p:", "", annotateText)) %>% 
+  ungroup() %>% 
+  mutate(Test = if_else(Test == "Hip circunference",
+                        "Hip circ.",
+                        Test))  %>% 
+  mutate(Test = if_else(Test == "PWC (Km/h)",
+                        "PWC (km/h)",
+                        Test))
+```
+
+```{r, fig.width= 7, fig.height=3}
+g1 <- df %>%
+  filter(!str_detect(Group, "Extr")) %>% 
+  mutate(Timepoint = factor(Timepoint, levels = c("Before", "After"))) %>%
+  filter(Test %in% (label.df %>% pull(Test) %>% unique)) %>%
+  filter(Metric == "Biometric profile") %>% 
+  droplevels() %>% 
+  mutate(old.timepoint = Timepoint) %>% 
+  mutate(Timepoint = Timepoint %>% as.numeric()) %>% 
+  ggplot(aes (x = paste(Group, Timepoint), y = Value, group =  Group)) +
+  geom_boxplot(aes(group = paste(Group, Timepoint), color = Group)) +
+  geom_jitter(aes(col = Group), alpha =.7) +
+  facet_wrap(~ Test, scales = "free", nrow = 1) +
+  geom_text(data = label.df %>% filter(Metric == "Biometric profile"),
+            aes(x = xpos,
+                y = ypos,
+                hjust = hjustvar,
+                vjust = vjustvar,
+                label = annotateText,
+                col = Group)) +
+  scale_x_discrete(labels = c(rep(c("Before", "After"),6))) +
+  labs(x = "Timepoint") +
+  ggpubr::rotate_x_text()
+
+
+
+g2 <- df %>%
+  filter(!str_detect(Group, "Extr")) %>% 
+  mutate(Timepoint = factor(Timepoint, levels = c("Before", "After"))) %>%
+  filter(Test %in% (label.df %>% pull(Test) %>% unique)) %>%
+  filter(Metric == "Blood profile") %>% 
+  droplevels() %>% 
+  mutate(old.timepoint = Timepoint) %>% 
+  mutate(Timepoint = Timepoint %>% as.numeric()) %>% 
+  ggplot(aes (x = paste(Group, Timepoint), y = Value, group =  Group)) +
+  geom_boxplot(coef = 6, aes(group = paste(Group, Timepoint), color = Group)) +
+  geom_jitter(aes(col = Group), alpha =.7) +
+  facet_wrap(~ Test, scales = "free", nrow = 1) +
+  geom_text(data= label.df %>% filter(Metric == "Blood profile"),
+            aes(x = xpos,
+                y = ypos,
+                hjust = hjustvar,
+                vjust = vjustvar,
+                label = annotateText,
+                col = Group)) +
+  scale_x_discrete(labels = c(rep(c("Before", "After"),18))) +
+  labs(x = "Timepoint") +
+  ggpubr::rotate_x_text()
+
+ggarrange(g1, g2,common.legend = T,legend = "bottom", ncol = 2, labels = c("A", "B"),widths = c(2,3))
+```
+
+```{r}
+head(df)
+head(label.df)
+```
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```

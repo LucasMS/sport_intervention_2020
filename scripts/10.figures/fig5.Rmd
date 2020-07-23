@@ -1,0 +1,248 @@
+---
+title: "Figure 5"
+author: "Lucas Moitinho-Silva"
+date: "`r Sys.Date()`"
+output:
+   BiocStyle::html_document:
+      toc: true
+      df_print: paged
+      self_contained: true
+      code_download: true
+      highlight: tango
+#bibliography: mylib.bib
+editor_options:
+  chunk_output_type: console
+params:
+  FIGPATH: "figures/"
+  d.out: "./"
+---
+
+# Preparations
+
+## Set global options
+
+```{r style, echo = T, results="asis", cache=FALSE, message = F}
+#v.01
+# Set knit global options
+library("knitr")
+options(digits = 2, width = 80)
+golden_ratio <- (1 + sqrt(5)) / 2
+opts_chunk$set(echo = TRUE,
+               tidy = FALSE,
+               include = TRUE,
+               fig.path = params$FIGPATH,
+               dev=c("png",'pdf'),
+               fig.height = 6,
+               fig.width = 5 * golden_ratio,
+               comment = '  ',
+               dpi = 300,
+               cache = FALSE)
+library("rmarkdown")
+
+# Pretty outputs
+library("BiocStyle")
+library("ggthemes") # add ggplot2 themes
+library("ggplot2")
+theme_set(theme_few(base_size = 10))
+
+# Set seed for reproducibility
+set.seed(13)
+# Color blind friendly pallet
+cbp1 <- c("#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+scale_fill_discrete <- function(...) {
+  scale_fill_manual(..., values = cbp1)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_manual(..., values = cbp1)
+}
+
+# Set output directory
+d.out <- params$d.out
+rm(params)
+```
+
+
+## Load libraries for the session
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(RColorBrewer)
+library(reshape2)
+library(vegan)
+```
+
+## Import data
+```{r}
+alpha <- "/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/8.elite/to.plot.alpha.rds" %>% 
+  readRDS()
+beta <- '/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/8.elite/to.plot.beta.rds' %>% 
+  readRDS()
+diff <- '/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/8.elite/to.plot.diff.rds' %>% 
+  readRDS()
+pcr <- "/home/lsilva/IKMB/projects/sport/analysis/25.to.publish/9.qpcr/qpcr.rds" %>% 
+  readRDS()
+micro.r <- "/home/lsilva/IKMB/projects/sport/data.clean/micro.r.tsv" %>% 
+  read.delim(stringsAsFactors = F)
+meta <- "/home/lsilva/IKMB/projects/sport/data.clean/elite.group.tsv" %>% 
+  read_tsv()
+```
+# Filter data 
+
+## Rarefied micro
+
+```{r}
+micro.r <- micro.r %>% 
+  rownames_to_column("Seq.ID") %>% 
+  right_join(meta %>% select(Seq.ID), by = "Seq.ID") %>% 
+  column_to_rownames("Seq.ID")
+micro.r <- micro.r[,colSums(micro.r)> 0]
+```
+
+
+# Change names
+
+```{r}
+alpha <- alpha %>% 
+  mutate(Group = if_else(Group == "Control",
+                         "Phys. inactive",
+                         "Elite athlete")) %>% 
+  mutate(Group = factor(Group, levels = c("Phys. inactive",
+                                          "Elite athlete"))) 
+
+beta <- beta %>% 
+  mutate(Group = if_else(Group == "Control",
+                         "Phys. inactive",
+                         "Elite athlete")) %>% 
+  mutate(Group = factor(Group, levels = c("Phys. inactive",
+                                          "Elite athlete")))
+meta <- meta %>% 
+  mutate(Group = if_else(Group == "Control",
+                         "Phys. inactive",
+                         "Elite athlete")) %>% 
+  mutate(Group = factor(Group, levels = c("Phys. inactive",
+                                          "Elite athlete"))) 
+
+pcr <- pcr %>% 
+  mutate(Group = if_else(Group == "Control",
+                         "Phys. inactive",
+                         "Elite athlete")) %>% 
+  mutate(Group = factor(Group, levels = c("Phys. inactive",
+                                          "Elite athlete"))) 
+
+```
+
+
+# Combine elements
+
+```{r, fig.width= 8, fig.height=8}
+alpha <- alpha %>%
+  dplyr::select(c("Chao1", "InvSimp"), Group) %>%
+  melt() %>%
+  dplyr::rename("alpha.div" = "variable")
+
+
+
+alpha.label <- data.frame(alpha.div = c("Chao1", "InvSimp")) %>% 
+  mutate(Group ="Phys. inactive",
+         value = c(350, 82),
+         t = "(n.s.)")
+
+g1 <- ggplot(alpha, aes(x = Group,
+                        y = value)) +
+  geom_boxplot(coef = 6, aes(color = Group)) +
+  geom_jitter(size = 0.8, aes(color = Group)) +
+  facet_wrap(~ alpha.div, scales = "free") +
+  labs(y = "Index") +
+  theme(legend.position = "none") +
+  ggpubr::rotate_x_text() +
+  geom_text(data = alpha.label,  x = 1.5, aes(label=t))
+
+
+g2 <- beta %>%
+  ggpubr::ggscatterhist(.,
+                        x = "MDS1", y = "MDS2",
+                        color = "Group",
+                        margin.params = list(fill = "Group", color = "darkgrey", size = 0.2),
+                        margin.plot = "boxplot",
+                        ggtheme = theme_few(),
+                        legend = "none",
+                        palette = cbp1) 
+
+
+getPalette <- colorRampPalette(brewer.pal(8, "Dark2")[7:1])
+colourCount <- diff %>%
+  filter(padj < 0.05) %>%
+  select(Phylum) %>%
+  unique() %>%
+  nrow()
+
+# Make 
+asvs <- diff %>%
+  filter(padj < 0.05) %>% 
+  pull(ASV)
+
+df <- micro.r %>% 
+  rownames_to_column("Seq.ID") %>% 
+  select(all_of(asvs), Seq.ID) %>% 
+  melt() %>% 
+  rename("ASV" = "variable") %>% 
+  rename("count" = "value") %>% 
+  left_join(meta, meta, by = "Seq.ID") %>% 
+  left_join(diff, by = "ASV")
+
+g3 <- df %>% 
+  mutate(Genus = str_replace(Genus, "\\(unc.\\)", "(f)")) %>% 
+  mutate(Genus = abbreviate(Genus, 15,dot = T)) %>% 
+  ggplot(aes(x = Group, y = count + 1)) +
+  geom_jitter(aes(color = Group), width = 0.1) +
+  facet_wrap(~ paste0(Genus, ":", ASV),
+             ncol = 3) +
+  scale_y_log10() +
+  geom_smooth(method = "glm", se = F, color = "darkgrey", aes(group = ASV)) +
+  labs(y = "Sequences (+1)") +
+  ggpubr::rotate_x_text()
+
+# Get colors
+
+g4 <- pcr %>% 
+  ggplot(aes(x = Group, y = Mean, color = Group)) +
+  geom_boxplot(coef = 6) +
+  geom_jitter() +
+  scale_y_log10() +
+  labs (y = "Veillonella DNA conc.") +
+  ggpubr::rotate_x_text() +
+  theme(legend.position = "none") +
+  annotate("text", x = 1.5, y = 0.005, label = "(n.s.)")
+
+
+
+g12 <- ggarrange(g1,
+                 g2,
+                 g4,
+                 nrow = 3,
+                 common.legend = T,
+                 legend = "none",
+                 labels = c("A", "B", "D"),
+                 heights = c(1,1, 1))
+
+
+
+ggarrange(g12,
+          g3,
+          ncol = 2,
+          labels = c("", "C"),
+          legend = "bottom",
+          widths =  c(1,1.4), 
+          common.legend = T)
+
+
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
