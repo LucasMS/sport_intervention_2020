@@ -136,8 +136,10 @@ b <- after[[1]] + coord_flip()
 
 c <- intervention[[2]]
 
-d <- intervention[[3]]
-e <- after[[3]]
+d <- intervention[[3]] +
+  labs(y = "PC1\n beta coefficient", x = "Group")
+e <- after[[3]] + 
+  labs(y = "PC2\n beta coefficient", x = "Group")
 
 ```
 

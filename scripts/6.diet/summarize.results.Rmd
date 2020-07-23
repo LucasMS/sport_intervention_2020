@@ -196,6 +196,7 @@ label.df <- intake %>%
 
 ```{r}
 g2 <- diet.meta %>% 
+  filter(Group != "Elite") %>% 
   select(Mcc.p.2e2ssoh, ParticipantID, Group, Date, Days) %>% 
   ggplot(aes(x = Days, y = Mcc.p.2e2ssoh)) +
   facet_wrap(~ Group) + #Group ~ ParticipantID) +
@@ -214,6 +215,7 @@ g2 <- diet.meta %>%
             size = 0.5, alpha = 0.2) +
   # Fit statistical model for the intervention
   geom_smooth(data = diet.meta %>%
+                filter(Group != "Elite") %>% 
                 filter(Date <= end.intervention),
               method = "lm", aes(color = Group, fill=Group),
               formula = lm(Mcc.p.2e2ssoh ~ ParticipantID + Days,
